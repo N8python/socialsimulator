@@ -1,5 +1,6 @@
 let people = [];
 let friendships = [];
+let groups = [];
 let targetPerson;
 let iteration = 0;
 const dashboard = document.getElementById("dashboard");
@@ -23,6 +24,24 @@ function bound1(x) {
     return min(1, max(0, x));
 }
 
+function getShips(person) {
+    const ships = [];
+    person.friendsWith.forEach((friend, i) => {
+        const ship = {};
+        ship.index = i;
+        ship.friend = friend;
+        ship.attention = person.friendPointsAlloc[i];
+        const friendship = friendships.find(f => f.people.includes(person) && f.people.includes(friend));
+        if (friendship) {
+            ship.strength = (friendship.person1strength + friendship.person2strength) / 2;
+            ship.friendship = friendship;
+            ships.push(ship);
+        }
+    });
+    ships.sort((a, b) => b.strength - a.strength);
+    return ships;
+}
+
 function draw() {
     background(255);
     rect(0, 0, width, height);
@@ -34,6 +53,15 @@ function draw() {
         line(ship.person1.x, ship.person1.y, ship.person2.x, ship.person2.y);
         stroke(0);
         strokeWeight(1);
+    });
+    groups.forEach((group, i) => {
+        if (group.people.length < 3) {
+            group.people.forEach(person => {
+                person.inGroup = false;
+                person.group = undefined;
+            })
+            groups.splice(i, 1);
+        }
     })
     people.forEach(person => {
         person.x += person.xVel * Math.cos(iteration / 100);
@@ -65,19 +93,56 @@ function draw() {
                 person.trails.slice(i, 1);
             }
         });
-        if (person === targetPerson) {
+        if (person === targetPerson && !person.group) {
             stroke(125);
+        } else if (person.group) {
+            strokeWeight(5);
+            stroke(...person.group.color);
         }
         const wellness = (person.stats.features.happiness - person.stats.features.insecurity + 1) / 2;
-        fill(255 - (255 * wellness), 255 * wellness, 0)
+        fill(Math.min(255, 255 - (255 * wellness) + ((person.drama > 0) ? person.drama : 0)), 255 * wellness, 0);
+        person.drama--;
         ellipse(person.x, person.y, 75, 75);
-        fill(255);
         stroke(0);
+        strokeWeight(1);
+        fill(255);
         textSize(15);
         textAlign(CENTER);
         text(person.name, person.x, person.y + 5);
     });
     if (iteration % 60 === 0) {
+        groups.forEach(group => {
+            group.shortTermDramaChance *= group.instability;
+            if (Math.random() < group.shortTermDramaChance) {
+                group.instability *= 1.1;
+                group.people.forEach(person => {
+                    person.drama = 255;
+                    const ships = getShips(person);
+                    ships.forEach(ship => {
+                        if (ship.strength < 0.75 && ship.friend.group === group) {
+                            if (Math.random() < 0.25) {
+                                const remove = ship;
+                                friendships.splice(friendships.indexOf(remove.friendship), 1);
+                                person.friendsWith.splice(remove.index, 1);
+                                person.friendPointsAlloc.splice(remove.index, 1);
+                                person.friendPoints++;
+                                const otherIndex = remove.friend.friendsWith.findIndex(p => p === person);
+                                remove.friend.friendsWith.splice(otherIndex, 1);
+                                remove.friend.friendPointsAlloc.splice(otherIndex, 1);
+                                remove.friend.friendPoints++;
+                                person.nos.push(remove.friend);
+                                remove.friend.nos.push(person);
+                                person.stats.features.insecurity += 0.1;
+                                remove.friend.stats.features.insecurity += 0.1;
+                                person.stats.features.insecurity = min(1, person.stats.features.insecurity);
+                                remove.friend.stats.features.insecurity = min(1, remove.friend.stats.features.insecurity);
+                            }
+                        }
+                    })
+                })
+                group.shortTermDramaChance = 0.0001;
+            }
+        })
         friendships.forEach(ship => {
             const eventChance = min((ship.person1.stats.traits.extraversion + ship.person2.stats.traits.extraversion) / 2, 0.03);
             if (Math.random() < eventChance) {
@@ -124,17 +189,28 @@ function draw() {
                         })
                         const mse = (mses.reduce((t, v) => t + v) / mses.length) * person1.stats.features.amicability * person2.stats.features.amicability * (person1.stats.features.gender !== person2.stats.features.gender ? person1.stats.features.genderDiscount : person2.stats.features.genderDiscount) * 0.5;
                         if (Math.random() < mse) {
-                            friendships.push({
-                                people: [person1, person2],
-                                person1,
-                                person2,
-                                person1strength: abilityScore(),
-                                person2strength: abilityScore()
-                            });
-                            person1.friendsWith.push(person2);
-                            person2.friendsWith.push(person1);
-                            person1.friendPointsAlloc.push(drawFriendPoints(person1));
-                            person2.friendPointsAlloc.push(drawFriendPoints(person2));
+                            let chance = 1;
+                            if (person1.group) {
+                                chance = 1 / (person1.group.people.length - 1);
+                                if (person2.group) {
+                                    chance *= 1 / (person2.group.people.length - 1);
+                                }
+                            } else if (person2.group) {
+                                chance = 1 / (person2.group.people.length - 1);
+                            }
+                            if (Math.random() < chance) {
+                                friendships.push({
+                                    people: [person1, person2],
+                                    person1,
+                                    person2,
+                                    person1strength: abilityScore(),
+                                    person2strength: abilityScore()
+                                });
+                                person1.friendsWith.push(person2);
+                                person2.friendsWith.push(person1);
+                                person1.friendPointsAlloc.push(drawFriendPoints(person1));
+                                person2.friendPointsAlloc.push(drawFriendPoints(person2));
+                            }
                         }
                     }
                 }
@@ -142,18 +218,32 @@ function draw() {
         })
         people.forEach(person => {
             if (Math.random() < person.stats.traits.charisma) {
-                const ships = [];
-                person.friendsWith.forEach((friend, i) => {
-                    const ship = {};
-                    ship.index = i;
-                    ship.friend = friend;
-                    ship.attention = person.friendPointsAlloc[i];
-                    const friendship = friendships.find(f => f.people.includes(person) && f.people.includes(friend));
-                    ship.strength = (friendship.person1strength + friendship.person2strength) / 2;
-                    ship.friendship = friendship;
-                    ships.push(ship);
-                });
-                ships.sort((a, b) => b.strength - a.strength);
+                const ships = getShips(person);
+                if (!person.group) {
+                    const groupMap = {};
+                    ships.forEach(({ friend }) => {
+                        if (friend.group) {
+                            if (groupMap[friend.group.color]) {
+                                groupMap[friend.group.color] += 1;
+                            } else {
+                                groupMap[friend.group.color] = 1;
+                            }
+                        }
+                    })
+                    Object.entries(groupMap).forEach(([color, amt]) => {
+                        if (amt > 1) {
+                            const group = groups.find(group => group.color.toString() === color);
+                            group.people.push(person);
+                            person.group = group;
+                            person.inGroup = true;
+                            group.shortTermDramaChance *= 2;
+                        }
+                    })
+                } else if (person.group && ships.filter(({ friend }) => friend.group === person.group) < 2) {
+                    person.group.people.splice(person.group.people.indexOf(person), 1);
+                    person.group = undefined;
+                    person.inGroup = false;
+                }
                 let best;
                 let currIndex;
                 for (const [idx, ship] of Object.entries(ships)) {
@@ -190,6 +280,37 @@ function draw() {
                         remove.friend.nos.push(person);
                     }
                 }
+                if (ships.length >= 2) {
+                    const friends = [ships[0], ships[1]].map(x => x.friend);
+                    friends.forEach(friend => {
+                        const otherShips = getShips(friend);
+                        otherShips.forEach(({ friend: friend2 }) => {
+                            if (friend2 !== person) {
+                                const otherShips2 = getShips(friend2);
+                                otherShips2.forEach(({ friend: friend3 }) => {
+                                    if (friend3 === person) {
+                                        if (!person.inGroup && !friend.inGroup && !friend2.inGroup) {
+                                            const group = {
+                                                color: [random(0, 255), random(0, 125), random(0, 255)],
+                                                people: [person, friend, friend2]
+                                            };
+                                            groups.push(group);
+                                            person.group = group;
+                                            friend.group = group;
+                                            friend2.group = group;
+                                            person.inGroup = true;
+                                            friend.inGroup = true;
+                                            friend2.inGroup = true;
+                                            group.shortTermDramaChance = 0.0001;
+                                            group.instability = 1 + group.people.map(person => 1 - person.stats.features.loyalty).reduce((t, v) => t + v) / 3;
+                                        }
+                                    }
+                                })
+                            }
+                        })
+                    });
+
+                }
             }
         })
     }
@@ -200,10 +321,11 @@ function draw() {
                 person.loneliness = max(0.5, person.loneliness);
             } else {
                 person.loneliness = 1;
+                person.stats.features.insecurity *= 0.9;
             }
         })
     }
-    if (iteration % 1200 === 0) {
+    if (iteration % 400 === 0) {
         people.forEach(person => {
             person.nos = [];
         })
@@ -234,6 +356,15 @@ function likenessScore() {
         return 1;
     }
     return 0;
+}
+
+function viewGroups() {
+    let html = "<h1>Groups:</h1>";
+    groups.sort((a, b) => b.people.length - a.people.length).forEach(group => {
+        html += `<h3>Group <div style="display:inline-block;width:15px;height:15px;background-color:rgb(${group.color.join(",")});"></div>:</h3>`
+        html += `<p>People: ${group.people.map(p => p.name).join(", ")}`;
+    })
+    dashboard.innerHTML = html;
 }
 
 function updateDashboard() {
@@ -354,6 +485,7 @@ function newPerson(name, gender) {
         name,
         trails: [],
         nos: [],
+        drama: 0,
         stats: {
             traits: {
                 strength: abilityScore(),
@@ -429,4 +561,7 @@ async function keyPressed() {
 
 document.getElementById("newPerson").onclick = () => {
     people.push(newPerson(faker.name.firstName(), randGender()))
+}
+document.getElementById("viewGroups").onclick = () => {
+    viewGroups();
 }
